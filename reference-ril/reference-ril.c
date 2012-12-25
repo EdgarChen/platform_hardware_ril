@@ -66,7 +66,13 @@ typedef enum {
     SIM_READY = 2, /* SIM_READY means the radio state is RADIO_STATE_SIM_READY */
     SIM_PIN = 3,
     SIM_PUK = 4,
-    SIM_NETWORK_PERSONALIZATION = 5
+    SIM_NETWORK_PERSONALIZATION = 5,
+    USIM_ABSENT = 6,
+    USIM_NOT_READY = 7,
+    USIM_READY = 8,
+    USIM_PIN = 9,
+    USIM_PUK = 10,
+    USIM_NETWORK_PERSONALIZATION = 11
 } SIM_Status;
 
 static void onRequest (int request, void *data, size_t datalen, RIL_Token t);
@@ -1972,6 +1978,64 @@ done:
     return ret;
 }
 
+/** Returns SIM_NOT_READY on error */
+static RIL_AppType
+getSIMType() {
+    ATResponse *p_response = NULL;
+    int err;
+    int ret = RIL_APPTYPE_UNKNOWN;
+    char *cuadLine;
+    char *cuadResult;
+
+    if (sState == RADIO_STATE_OFF || sState == RADIO_STATE_UNAVAILABLE) {
+        ret = RIL_APPTYPE_UNKNOWN;
+        goto done;
+    }
+
+    /* AT+CUAD will respond with the contents of the EF_DIR file on the SIM */
+    err = at_send_command_multiline("AT+CUAD", "+CUAD:", &p_response);
+
+    if (err != 0 || !p_response->success) {
+        goto error;
+    }
+
+
+    /**
+     * Run multiple tests for USIM detection, EF_DIR must be present and contain
+     * a valid USIM application ID (refer to ETSI TS 101 220).
+     */
+    if (p_response->p_intermediates != NULL) {
+        cuadLine = p_response->p_intermediates->line;
+
+        err = at_tok_start(&cuadLine);
+        if (err < 0) {
+            goto error;
+        }
+
+        err = at_tok_nextstr(&cuadLine, &cuadResult);
+        if (err < 0) {
+            goto error;
+        }
+
+        if (strstr(cuadResult, "A000000087") != NULL) {
+            ALOGD("Detected card type USIM");
+            ret = RIL_APPTYPE_USIM;
+        } else {
+            ALOGD("Detected card type SIM");
+            ret = RIL_APPTYPE_SIM;
+        }
+    }
+
+    goto done;
+
+error:
+    ALOGD("Failed to detect card type");
+    ret = RIL_APPTYPE_UNKNOWN;
+
+done:
+    at_response_free(p_response);
+    return ret;
+}
 
 /**
  * Get the current card status.
@@ -1998,6 +2062,24 @@ static int getCardStatus(RIL_CardStatus_v6 **pp_card_status) {
           NULL, NULL, 0, RIL_PINSTATE_ENABLED_BLOCKED, RIL_PINSTATE_UNKNOWN },
         // SIM_NETWORK_PERSONALIZATION = 5
         { RIL_APPTYPE_SIM, RIL_APPSTATE_SUBSCRIPTION_PERSO, RIL_PERSOSUBSTATE_SIM_NETWORK,
+          NULL, NULL, 0, RIL_PINSTATE_ENABLED_NOT_VERIFIED, RIL_PINSTATE_UNKNOWN },
+        // USIM_ABSENT = 6
+        { RIL_APPTYPE_UNKNOWN, RIL_APPSTATE_UNKNOWN, RIL_PERSOSUBSTATE_UNKNOWN,
+          NULL, NULL, 0, RIL_PINSTATE_UNKNOWN, RIL_PINSTATE_UNKNOWN },
+        // USIM_NOT_READY = 7
+        { RIL_APPTYPE_USIM, RIL_APPSTATE_DETECTED, RIL_PERSOSUBSTATE_UNKNOWN,
+          NULL, NULL, 0, RIL_PINSTATE_UNKNOWN, RIL_PINSTATE_UNKNOWN },
+        // USIM_READY = 8
+        { RIL_APPTYPE_USIM, RIL_APPSTATE_READY, RIL_PERSOSUBSTATE_READY,
+          NULL, NULL, 0, RIL_PINSTATE_UNKNOWN, RIL_PINSTATE_UNKNOWN },
+        // USIM_PIN = 9
+        { RIL_APPTYPE_USIM, RIL_APPSTATE_PIN, RIL_PERSOSUBSTATE_UNKNOWN,
+          NULL, NULL, 0, RIL_PINSTATE_ENABLED_NOT_VERIFIED, RIL_PINSTATE_UNKNOWN },
+        // USIM_PUK = 10
+        { RIL_APPTYPE_USIM, RIL_APPSTATE_PUK, RIL_PERSOSUBSTATE_UNKNOWN,
+          NULL, NULL, 0, RIL_PINSTATE_ENABLED_BLOCKED, RIL_PINSTATE_UNKNOWN },
+        // USIM_NETWORK_PERSONALIZATION = 11
+        { RIL_APPTYPE_USIM, RIL_APPSTATE_SUBSCRIPTION_PERSO, RIL_PERSOSUBSTATE_SIM_NETWORK,
           NULL, NULL, 0, RIL_PINSTATE_ENABLED_NOT_VERIFIED, RIL_PINSTATE_UNKNOWN }
     };
     RIL_CardState card_state;
@@ -2035,7 +2117,17 @@ static int getCardStatus(RIL_CardStatus_v6 **pp_card_status) {
         p_card_status->gsm_umts_subscription_app_index = 0;
 
         // Get the correct app status
-        p_card_status->applications[0] = app_status_array[sim_status];
+        if (card_state != RIL_CARDSTATE_ABSENT) {
+            int sim_type = getSIMType();
+
+            if (sim_type == RIL_APPTYPE_SIM) {
+                p_card_status->applications[0] = app_status_array[sim_status];
+            } else if (sim_type == RIL_APPTYPE_USIM) {
+                p_card_status->applications[0] = app_status_array[sim_status + USIM_ABSENT];
+            } else {
+                p_card_status->applications[0] = app_status_array[SIM_ABSENT];
+            }
+        }
     }
 
     *pp_card_status = p_card_status;
