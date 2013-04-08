@@ -2306,6 +2306,8 @@ static void onUnsolicited (const char *s, const char *sms_pdu)
                                        pStkPdu, strlen(pStkPdu));
         }
         free(line);
+    } else if(strStartsWith(s, "+CUSATEND")) {
+        RIL_onUnsolicitedResponse (RIL_UNSOL_STK_SESSION_END, NULL, 0);
     } else if (strStartsWith(s,"+CREG:")
                 || strStartsWith(s,"+CGREG:")
     ) {
