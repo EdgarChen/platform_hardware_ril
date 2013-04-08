@@ -1495,6 +1495,22 @@ static void  requestSendUSSD(void *data, size_t datalen, RIL_Token t)
 
 }
 
+static void  requestTerminalResponse(void *data, size_t datalen, RIL_Token t)
+{
+    int          err;
+    char*        cmd = NULL;
+    const char*  terminalResponse = (const char*)data;
+
+    asprintf(&cmd, "AT+CUSATT=%s", terminalResponse);
+
+    err = at_send_command(cmd, NULL);
+
+    if (err < 0) {
+        RIL_onRequestComplete(t, RIL_E_GENERIC_FAILURE, NULL, 0);
+    } else {
+        RIL_onRequestComplete(t, RIL_E_SUCCESS, NULL, 0);
+    }
+}
 
 /*** Callback methods from the RIL library to us ***/
 
@@ -1823,6 +1839,10 @@ onRequest (int request, void *data, size_t datalen, RIL_Token t)
 
             break;
         }
+
+        case RIL_REQUEST_STK_SEND_TERMINAL_RESPONSE:
+            requestTerminalResponse(data, datalen, t);
+            break;
 
         default:
             RIL_onRequestComplete(t, RIL_E_REQUEST_NOT_SUPPORTED, NULL, 0);
